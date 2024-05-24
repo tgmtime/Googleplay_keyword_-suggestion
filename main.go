@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -15,9 +16,8 @@ const (
 )
 
 var (
-	alphanumberic = append(rangeChar('a', 'z'), rangeChar('0', '9')...)
-	characters    = rangeChar('a', 'z')
-	headers       = map[string]string{
+	characters = rangeChar('a', 'z')
+	headers    = map[string]string{
 		"accept":          "*/*",
 		"accept-language": "en-US,en;q=0.9,de-DE;q=0.8,de;q=0.7,en-DE;q=0.6",
 		"content-type":    "application/x-www-form-urlencoded;charset=UTF-8",
@@ -49,18 +49,47 @@ func main() {
 		counter++
 		fmt.Printf("%d/%d\n", counter, len(combinations))
 		response := callGPSuggestAPI(term)
+		if response == nil {
+			continue
+		}
+
 		var responseBody []byte
 		responseBody, _ = io.ReadAll(response.Body)
 		response.Body.Close()
-		var nestedKeywords [][]interface{}
-		err := json.Unmarshal([]byte(strings.Split(string(responseBody), "\n")[3]), &nestedKeywords)
+		var nestedResponse []interface{}
+		err := json.Unmarshal([]byte(strings.Split(string(responseBody), "\n")[3]), &nestedResponse)
 		if err != nil {
 			fmt.Println("Error unmarshalling response:", err)
 			continue
 		}
-		keywords := nestedKeywords[0][2].([]interface{})[0].([]interface{})
+
+		keywordsData, ok := nestedResponse[0].([]interface{})
+		if !ok || len(keywordsData) < 3 {
+			fmt.Println("Unexpected JSON structure")
+			continue
+		}
+
+		keywordsList, ok := keywordsData[2].([]interface{})
+		if !ok || len(keywordsList) == 0 {
+			fmt.Println("Unexpected JSON structure")
+			continue
+		}
+
+		keywords, ok := keywordsList[0].([]interface{})
+		if !ok {
+			fmt.Println("Unexpected JSON structure")
+			continue
+		}
+
 		for _, k := range keywords {
-			keyword := k.([]interface{})[0].(string)
+			keywordData, ok := k.([]interface{})
+			if !ok || len(keywordData) == 0 {
+				continue
+			}
+			keyword, ok := keywordData[0].(string)
+			if !ok {
+				continue
+			}
 			resultList = append(resultList, map[string]string{
 				"search_term":       term,
 				"suggested_keyword": keyword,
@@ -94,12 +123,16 @@ func combinationGenerator(characters []string, length int) []string {
 }
 
 func callGPSuggestAPI(searchTerm string) *http.Response {
-	data := fmt.Sprintf(`f.req=%5B%5B%5B%22teXCtc%22%2C%22%5Bnull%2C%5B%5C%22%s%5C%22%5D%2C%5B10%5D%2C%5B2%2C1%5D%2C4%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&at=AHEfX0v2tcQRorogvL7a9C2LqJR3%3A1716493977115&`, searchTerm)
-	req, err := http.NewRequest("POST", "https://play.google.com/_/PlayStoreUi/data/batchexecute", bytes.NewBuffer([]byte(data)))
+	data := url.Values{}
+	data.Set("f.req", fmt.Sprintf(`[[["teXCtc","[null,[\"%s\"],[10],[2,1],4]",null,"generic"]]]`, searchTerm))
+	data.Set("at", "AHEfX0v2tcQRorogvL7a9C2LqJR3:1716493977115")
+
+	req, err := http.NewRequest("POST", "https://play.google.com/_/PlayStoreUi/data/batchexecute", bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		fmt.Println("Error creating request:", err)
 		return nil
 	}
+
 	q := req.URL.Query()
 	for k, v := range params {
 		q.Add(k, v)
@@ -108,10 +141,16 @@ func callGPSuggestAPI(searchTerm string) *http.Response {
 	for k, v := range headers {
 		req.Header.Add(k, v)
 	}
+	req.Header.Add("Content-Length", fmt.Sprint(len(data.Encode())))
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error making request:", err)
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Received non-OK response: %s\n", resp.Status)
 		return nil
 	}
 	return resp
