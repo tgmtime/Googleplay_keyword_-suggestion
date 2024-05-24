@@ -39,7 +39,10 @@ var (
 )
 
 func main() {
-	combinations := combinationGenerator(characters, 2)
+	// combinations := combinationGenerator(characters, 2)
+	//puzzle 
+	//combination Generator function gives permutation output. It will be updated to produce logical combination based output.
+	combinations := combinationGenerator([]string{"p","u","z"}, 2)
 	fmt.Println("len of char list: ", len(combinations))
 
 	var resultList []map[string]string
